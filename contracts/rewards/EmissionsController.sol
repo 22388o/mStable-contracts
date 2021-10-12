@@ -86,7 +86,7 @@ contract EmissionsController is IGovernanceHook, Initializable, ImmutableModule 
     /** @notice Recipient is a module, governed by mStable governance
      * @param _nexus System nexus that resolves module addresses
      * @param _rewardToken token that rewards are distributed in. eg MTA
-     * @param _stakingContracts staking contract with voting power 
+     * @param _stakingContracts staking contract with voting power
      * @param _totalRewardsAmount rewards to be distributed over the live of the emissions
      */
     constructor(
@@ -233,19 +233,10 @@ contract EmissionsController is IGovernanceHook, Initializable, ImmutableModule 
         // get staker's votes
         uint256 stakerVotes = getVotes(msg.sender);
         console.log("staker votes %s", stakerVotes);
-
         // STEP 1 - adjust dial weighted votes from removed staker weighted votes
-        DialWeight[] memory oldDialWeights = stakerDialWeights[msg.sender];
-        uint256 oldLen = oldDialWeights.length;
-        uint256 oldTotalWeights;
+        uint256 oldLen = stakerDialWeights[msg.sender].length;
         if (oldLen > 0) {
             _moveVotingPower(msg.sender, stakerVotes, _subtract);
-
-            for (uint256 i = 0; i < oldLen; i++) {
-                oldTotalWeights += oldDialWeights[i].weight;
-            }
-            // Remove staker's old weighted votes from the total weighted votes
-            totalDialVotes -= (stakerVotes * oldTotalWeights) / 1e18;
             // clear the old weights as they will be added back below
             delete stakerDialWeights[msg.sender];
         }
@@ -259,11 +250,13 @@ contract EmissionsController is IGovernanceHook, Initializable, ImmutableModule 
                 newTotalWeight += _newDialWeights[i].weight;
                 // Add staker's dial weight
                 stakerDialWeights[msg.sender].push(_newDialWeights[i]);
-                console.log("staker dial %s, addr %s, weight %s", i, _newDialWeights[i].addr, _newDialWeights[i].weight);
+                console.log(
+                    "staker dial %s, addr %s, weight %s",
+                    i,
+                    _newDialWeights[i].addr,
+                    _newDialWeights[i].weight
+                );
             }
-            // Add staker's new weighted votes to the total amount of votes across all dials and save to storage
-            totalDialVotes += (stakerVotes * newTotalWeight) / 1e18;
-            console.log("staker total dial votes %s", totalDialVotes);
 
             _moveVotingPower(msg.sender, stakerVotes, _add);
         }
@@ -282,15 +275,6 @@ contract EmissionsController is IGovernanceHook, Initializable, ImmutableModule 
         // STEP 1 - update the total weighted votes across all dials
         // if transferring votes from or to a delegate then no need to change the total dial votes
         if (amount > 0) {
-            // If from a mint of votes (stake)
-            if (from == address(0)) {
-                totalDialVotes += amount;
-            }
-            // else if a burn of votes (withdraw)
-            else if (to == address(0)) {
-                totalDialVotes -= amount;
-            }
-
             // STEP 2 - Update the staker's dial weights
             // If burning (withdraw) or transferring delegated votes from a staker
             if (from != address(0)) {
@@ -298,7 +282,7 @@ contract EmissionsController is IGovernanceHook, Initializable, ImmutableModule 
             }
             // If minting (staking) or transferring delegated votes to a staker
             if (to != address(0)) {
-                _moveVotingPower(to, amount, _subtract);
+                _moveVotingPower(to, amount, _add);
             }
         }
     }
@@ -323,7 +307,13 @@ contract EmissionsController is IGovernanceHook, Initializable, ImmutableModule 
                 dialData[pref.addr].weightedVotes,
                 amountToChange
             );
-            console.log("dial %s, addr %s, weighted votes %s", i, pref.addr, dialData[pref.addr].weightedVotes);
+            console.log(
+                "dial %s, addr %s, weighted votes %s",
+                i,
+                pref.addr,
+                dialData[pref.addr].weightedVotes
+            );
+            totalDialVotes = _op(totalDialVotes, amountToChange);
         }
     }
 
