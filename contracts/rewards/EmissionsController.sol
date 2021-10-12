@@ -7,6 +7,7 @@ import { IVotes } from "../interfaces/IVotes.sol";
 import { ImmutableModule } from "../shared/ImmutableModule.sol";
 import { Initializable } from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
 import { SafeERC20, IERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "hardhat/console.sol";
 
 struct DialData {
     // uint256 weight;
@@ -45,8 +46,6 @@ contract EmissionsController is IGovernanceHook, Initializable, ImmutableModule 
     uint256 immutable totalRewardsAmount;
     /// @notice the start of the last distribution period which for 1 week periods, is 12am Thursday UTC
     uint256 public lastDistribution;
-    // TODO replace with curve rather than linear
-    uint256 public distributionRate;
 
     // VOTING
 
@@ -55,7 +54,7 @@ contract EmissionsController is IGovernanceHook, Initializable, ImmutableModule 
     /// @notice list of dial addresses
     address[] public dials;
     /// @notice mapping of dial addresses to weights
-    mapping(address => DialData) dialData;
+    mapping(address => DialData) public dialData;
     /// @notice total number of staker votes across all the dials
     uint256 totalDialVotes;
     /// @notice mapping of staker addresses to an list of voter dial weights.
@@ -87,12 +86,12 @@ contract EmissionsController is IGovernanceHook, Initializable, ImmutableModule 
     /** @notice Recipient is a module, governed by mStable governance
      * @param _nexus System nexus that resolves module addresses
      * @param _rewardToken token that rewards are distributed in. eg MTA
-     * @param _votes gets a staker's voting power
+     * @param _stakingContracts staking contract with voting power 
      * @param _totalRewardsAmount rewards to be distributed over the live of the emissions
      */
     constructor(
         address _nexus,
-        address[] memory _votes,
+        address[] memory _stakingContracts,
         address _rewardToken,
         uint256 _totalRewardsAmount
     ) ImmutableModule(_nexus) {
@@ -100,15 +99,15 @@ contract EmissionsController is IGovernanceHook, Initializable, ImmutableModule 
         rewardToken = IERC20(_rewardToken);
         totalRewardsAmount = _totalRewardsAmount;
 
-        stakingContracts = new IVotes[](_votes.length);
-        for (uint256 i = 0; i < _votes.length; i++) {
-            require(_votes[i] != address(0), "Votes address is zero");
-            stakingContracts[i] = IVotes(_votes[i]);
-            isStakingContract[_votes[i]] = true;
+        stakingContracts = new IVotes[](_stakingContracts.length);
+        for (uint256 i = 0; i < _stakingContracts.length; i++) {
+            require(_stakingContracts[i] != address(0), "Staking contract address is zero");
+            stakingContracts[i] = IVotes(_stakingContracts[i]);
+            isStakingContract[_stakingContracts[i]] = true;
         }
     }
 
-    function initialize(address[] memory _dials, uint256 _distributionRate) public initializer {
+    function initialize(address[] memory _dials) public initializer {
         // Transfer all reward tokens for all future distributions to this distributor
         rewardToken.safeTransferFrom(msg.sender, address(this), totalRewardsAmount);
 
@@ -120,8 +119,6 @@ contract EmissionsController is IGovernanceHook, Initializable, ImmutableModule 
         // for a 1 week period, this is 12am Thursday UTC
         // This means the first distribution needs to be after 12am Thursday UTC
         lastDistribution = (block.timestamp / DISTRIBUTION_PERIOD) * DISTRIBUTION_PERIOD;
-
-        distributionRate = _distributionRate;
     }
 
     /***************************************
@@ -189,7 +186,8 @@ contract EmissionsController is IGovernanceHook, Initializable, ImmutableModule 
         lastDistribution = lastDistribution + DISTRIBUTION_PERIOD;
 
         // STEP 2 - Calculate amount of rewards to distribute this week
-        uint256 totalDistributionAmount = (totalRewardsAmount * distributionRate) / SCALE;
+        // TODO replace with curve rather than linear
+        uint256 totalDistributionAmount = totalRewardsAmount / DISTRIBUTIONS;
 
         // For each dial
         uint256 len = dials.length;
@@ -201,7 +199,7 @@ contract EmissionsController is IGovernanceHook, Initializable, ImmutableModule 
                 continue;
             }
             uint256 dialDistributionAmount = (totalDistributionAmount * dialWeightedVotes) /
-                (SCALE * totalDialVotes);
+                totalDialVotes;
 
             // STEP 4 - Send the rewards the to the dial
             rewardToken.safeTransfer(dialAddress, dialDistributionAmount);
@@ -234,6 +232,7 @@ contract EmissionsController is IGovernanceHook, Initializable, ImmutableModule 
     function setVoterDialWeights(DialWeight[] memory _newDialWeights) external {
         // get staker's votes
         uint256 stakerVotes = getVotes(msg.sender);
+        console.log("staker votes %s", stakerVotes);
 
         // STEP 1 - adjust dial weighted votes from removed staker weighted votes
         DialWeight[] memory oldDialWeights = stakerDialWeights[msg.sender];
@@ -254,14 +253,17 @@ contract EmissionsController is IGovernanceHook, Initializable, ImmutableModule 
         // STEP 2 - adjust dial weighted votes from added staker weighted votes
         uint256 newTotalWeight;
         uint256 newLen = _newDialWeights.length;
+        console.log("_newDialWeights len %s", newLen);
         if (newLen > 0) {
             for (uint256 i = 0; i < newLen; i++) {
                 newTotalWeight += _newDialWeights[i].weight;
                 // Add staker's dial weight
                 stakerDialWeights[msg.sender].push(_newDialWeights[i]);
+                console.log("staker dial %s, addr %s, weight %s", i, _newDialWeights[i].addr, _newDialWeights[i].weight);
             }
             // Add staker's new weighted votes to the total amount of votes across all dials and save to storage
             totalDialVotes += (stakerVotes * newTotalWeight) / 1e18;
+            console.log("staker total dial votes %s", totalDialVotes);
 
             _moveVotingPower(msg.sender, stakerVotes, _add);
         }
@@ -321,6 +323,7 @@ contract EmissionsController is IGovernanceHook, Initializable, ImmutableModule 
                 dialData[pref.addr].weightedVotes,
                 amountToChange
             );
+            console.log("dial %s, addr %s, weighted votes %s", i, pref.addr, dialData[pref.addr].weightedVotes);
         }
     }
 
