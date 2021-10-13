@@ -7,7 +7,6 @@ import { IVotes } from "../interfaces/IVotes.sol";
 import { ImmutableModule } from "../shared/ImmutableModule.sol";
 import { Initializable } from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
 import { SafeERC20, IERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "hardhat/console.sol";
 
 struct DialData {
     // uint256 weight;
@@ -56,7 +55,7 @@ contract EmissionsController is IGovernanceHook, Initializable, ImmutableModule 
     /// @notice mapping of dial addresses to weights
     mapping(address => DialData) public dialData;
     /// @notice total number of staker votes across all the dials
-    uint256 totalDialVotes;
+    uint256 public totalDialVotes;
     /// @notice mapping of staker addresses to an list of voter dial weights.
     /// @dev the sum of the weights for each staker must equal SCALE = 1e18
     // TODO - if the sum must be == 1e18, then why do `totalDialVotesMem -= stakerVotes * oldTotalWeights;` in setVoterDialWeights
@@ -115,10 +114,11 @@ contract EmissionsController is IGovernanceHook, Initializable, ImmutableModule 
             _addDial(_dials[i]);
         }
 
-        // the last distribution will be set at the start of the current time period.
+        // the last distribution will be set at the end of the current time period.
         // for a 1 week period, this is 12am Thursday UTC
         // This means the first distribution needs to be after 12am Thursday UTC
-        lastDistribution = (block.timestamp / DISTRIBUTION_PERIOD) * DISTRIBUTION_PERIOD;
+        // It also means there is this period and next to vote beofre the first distribution
+        lastDistribution = ((block.timestamp + 1 weeks) / DISTRIBUTION_PERIOD) * DISTRIBUTION_PERIOD;
     }
 
     /***************************************
@@ -232,7 +232,7 @@ contract EmissionsController is IGovernanceHook, Initializable, ImmutableModule 
     function setVoterDialWeights(DialWeight[] memory _newDialWeights) external {
         // get staker's votes
         uint256 stakerVotes = getVotes(msg.sender);
-        console.log("staker votes %s", stakerVotes);
+
         // STEP 1 - adjust dial weighted votes from removed staker weighted votes
         uint256 oldLen = stakerDialWeights[msg.sender].length;
         if (oldLen > 0) {
@@ -244,18 +244,11 @@ contract EmissionsController is IGovernanceHook, Initializable, ImmutableModule 
         // STEP 2 - adjust dial weighted votes from added staker weighted votes
         uint256 newTotalWeight;
         uint256 newLen = _newDialWeights.length;
-        console.log("_newDialWeights len %s", newLen);
         if (newLen > 0) {
             for (uint256 i = 0; i < newLen; i++) {
                 newTotalWeight += _newDialWeights[i].weight;
                 // Add staker's dial weight
                 stakerDialWeights[msg.sender].push(_newDialWeights[i]);
-                console.log(
-                    "staker dial %s, addr %s, weight %s",
-                    i,
-                    _newDialWeights[i].addr,
-                    _newDialWeights[i].weight
-                );
             }
 
             _moveVotingPower(msg.sender, stakerVotes, _add);
@@ -306,12 +299,6 @@ contract EmissionsController is IGovernanceHook, Initializable, ImmutableModule 
             dialData[pref.addr].weightedVotes = _op(
                 dialData[pref.addr].weightedVotes,
                 amountToChange
-            );
-            console.log(
-                "dial %s, addr %s, weighted votes %s",
-                i,
-                pref.addr,
-                dialData[pref.addr].weightedVotes
             );
             totalDialVotes = _op(totalDialVotes, amountToChange);
         }
